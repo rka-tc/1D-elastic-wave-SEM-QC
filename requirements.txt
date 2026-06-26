@@ -1,0 +1,3 @@
+qiskit-aer == 0.13
+qiskit_ibm_runtime == 0.19
+qiskit-experiments == 0.6
