@@ -107,26 +107,39 @@ class HamiltonianBuilderSEM:
         return x.astype(np.float64), w
 
 
+    # def _compute_derivative_matrix(self, xi):
+    #     """
+    #     Stable derivative matrix at GLL points using Legendre polynomials.
+    #     """
+    #     N = len(xi)
+    #     D = np.zeros((N, N))
+    #     P = np.polynomial.legendre.Legendre.basis(N - 1)
+
+    #     Pn = P(xi)
+    #     for i in range(N):
+    #         for j in range(N):
+    #             if i != j:
+    #                 D[i, j] = (Pn[i] / Pn[j]) / (xi[i] - xi[j])
+    #         # Diagonal term (stable formulation)
+    #         if xi[i] == -1:
+    #             D[i, i] = -N * (N - 1) / 4
+    #         elif xi[i] == 1:
+    #             D[i, i] = +N * (N - 1) / 4
+    #         else:
+    #             D[i, i] = -xi[i] / (2 * (1 - xi[i] ** 2))
+    #     return D
     def _compute_derivative_matrix(self, xi):
-        """
-        Stable derivative matrix at GLL points using Legendre polynomials.
-        """
         N = len(xi)
         D = np.zeros((N, N))
         P = np.polynomial.legendre.Legendre.basis(N - 1)
-
         Pn = P(xi)
+        
         for i in range(N):
             for j in range(N):
                 if i != j:
                     D[i, j] = (Pn[i] / Pn[j]) / (xi[i] - xi[j])
-            # Diagonal term (stable formulation)
-            if xi[i] == -1:
-                D[i, i] = -N * (N - 1) / 4
-            elif xi[i] == 1:
-                D[i, i] = +N * (N - 1) / 4
-            else:
-                D[i, i] = -xi[i] / (2 * (1 - xi[i] ** 2))
+            D[i, i] = -np.sum(D[i, :])
+        
         return D
 
 
