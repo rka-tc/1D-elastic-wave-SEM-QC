@@ -36,7 +36,7 @@ from scipy.integrate import solve_ivp
 from qiskit_aer import AerSimulator
 
 # Own modules
-from utility.transform import HamiltonianBuilderSEM
+from utility.transformMain import HamiltonianBuilderSEM
 from utility.processing import MediumProcessor, StateProcessor
 from utility.backends import CloudBackend, LocalBackend
 from utility.circuits import CircuitGen1DA
@@ -230,8 +230,8 @@ class Solver1DEXP(Solver1D):
         # print("kwargs[nx]:", self.kwargs['nx'] )
         self.st.set_u(self.kwargs['u'], 0)
         self.st.set_v(self.kwargs['v'], 0)
-        # self.st.forward_state(0, self.tf.t @ self.tf.sqrt_m)
-        self.st.forward_state(0, self.tf.sqrt_m)       
+        self.st.forward_state(0, self.tf.t @ self.tf.sqrt_m)
+        # self.st.forward_state(0, self.tf.sqrt_m)       
         self.logger.info('Initial state forward-transformed.')
 
     def run(self) -> Dict[str, Any]:
@@ -248,8 +248,8 @@ class Solver1DEXP(Solver1D):
             for time in self.times])
         self.logger.info('Matrix exponential solved.')
 
-        # _ = [self.st.inverse_state(i, self.tf.inv_sqrt_m @ self.tf.inv_t)
-        _ = [self.st.inverse_state(i, self.tf.inv_sqrt_m)
+        _ = [self.st.inverse_state(i, self.tf.inv_sqrt_m @ self.tf.inv_t)
+        # _ = [self.st.inverse_state(i, self.tf.inv_sqrt_m)
          for i in range(len(self.times))]
         self.logger.info('States inverse-transformed.')
 

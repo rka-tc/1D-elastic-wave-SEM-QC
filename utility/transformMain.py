@@ -38,16 +38,37 @@ class HamiltonianBuilderSEM:
 
         # precompute reference GLL
         self.xi, self.wi = self._gll_nodes_weights(self.Np)
+        
+        # print("\nGLL nodes xi:", self.xi)
+        # print("GLL weights wi:", self.wi)
+
         self.D_ref = self._compute_derivative_matrix(self.xi)
+        # print("D_ref:")
+        # print(np.array2string(self.D_ref, precision=6, suppress_small=True))
+
+        # print("\nD_ref column sums (should all be ~0):")
+        # print(self.D_ref.sum(axis=0))
+
+        # print("\nD_ref row sums:")
+        # print(self.D_ref.sum(axis=1))
+        
         # compute matrices
         print("Assembling global matrices...")
         self.x, self.m, self.u, self.k = self._assemble_global()
         self.nx = len(self.x)
         self.q, self.h, self.t, self.inv_t, self.sqrt_M = self._mass_scale_and_build_H(self.m, self.k, self.u)
         self.plot_sem_domain()
+        # self.Pi_ac, self.eigenvalues, self.eigenvectors = self.build_acoustic_projector(-1 * self.k, self.m, self.Nel)
+        # self.H_proj, self.U_proj, self.Pi_block = self.build_projected_block_H(self.u, self.Pi_ac, self.h)
+
+        # # build transform mass matrix
+        # self.sqrt_m = np.block([[self.sqrt_M, np.zeros(self.m.shape)],
+        #                  [np.zeros(self.m.shape), self.sqrt_M]])
+
+        # CORRECT — only scale displacement half
         N = self.m.shape[0]
         self.sqrt_m = np.block([[self.sqrt_M,          np.zeros((N, N))],
-                                [np.zeros((N, N)),  self.sqrt_M]])   
+                                [np.zeros((N, N)), np.eye(N)]])          # identity on velocity
         # print("Mass matrix sqrt :", self.sqrt_m.shape)
 
         self.inv_sqrt_m = np.diag(1.0 / self.sqrt_m.diagonal())
@@ -110,8 +131,11 @@ class HamiltonianBuilderSEM:
         #print(J, rho_e, self.wi)
         M_e = rho_e * np.diag(self.wi) * J
         M_einvsqrt = np.diag(1/np.sqrt(M_e.diagonal()))
-        Uref = (mu_e * (np.diag(self.wi) * (2.0 / dx_e))) @ self.D_ref @ M_einvsqrt
+        E_ehalf = np.sqrt(mu_e * np.eye(N))
+        Uref = E_ehalf @ self.D_ref @ M_einvsqrt
         K_e = - self.D_ref.T @ ( mu_e * (np.diag(self.wi) * (2.0 / dx_e)) @ self.D_ref) 
+        # print("Element mass matrix M_e :", M_e)
+        # print("Element stiffness matrix K_e :", K_e)
         return M_e, K_e, Uref
 
 
@@ -122,6 +146,8 @@ class HamiltonianBuilderSEM:
         dx = L / Nel
         N_global = int(Nel * (Np - 1) + 1)
         M = np.zeros((N_global, N_global))
+        Ehalf = np.zeros((N_global, N_global))
+        Minvsqrt = np.zeros((N_global, N_global))
         K = np.zeros((N_global, N_global))
         U = np.zeros((N_global, N_global)) 
         dx = L / Nel
@@ -139,25 +165,32 @@ class HamiltonianBuilderSEM:
         np.save('x_sem.npy', x)
 
 
+
         for e in range(Nel):
             idx = np.arange(e * (Np - 1), e * (Np - 1) + Np)
             M_e, K_e, Uref = self._element_matrices(self.rho[e], self.mu[e], dx)
            
             M[np.ix_(idx, idx)] += M_e
             K[np.ix_(idx, idx)] += K_e
-            U[np.ix_(idx, idx)] += Uref
+            #U[np.ix_(idx, idx)] = Uref
+        # K = -1 * K
             
 
         # # Apply Dirichlet boundary conditions
         x = x[1:-1]
+        # 2. Apply Boundary Conditions (truncate M and K)
         M_sub = M[1:-1, 1:-1]
         K_sub = K[1:-1, 1:-1]
 
         # 3. Mass-Normalize the Stiffness Matrix
         # This accounts for the density (rho) changes
         inv_sqrt_M = np.diag(1.0 / np.sqrt(np.diag(M_sub)))
-        K_tilde = inv_sqrt_M @ (K_sub) @ inv_sqrt_M
+        K_tilde = inv_sqrt_M @ (-K_sub) @ inv_sqrt_M
 
+        vals, vecs = np.linalg.eigh(K_tilde)        # K_tilde = inv_sqrt_M @ (-K_sub) @ inv_sqrt_M
+        vals = np.maximum(vals, 0.0)                  # numerical safety
+        U = vecs @ np.diag(np.sqrt(vals)) @ vecs.T
+        # U = K_tilde @ inv_sqrt_M
         M = M_sub
         K = K_sub
         np.save('M_sem.npy', M)
@@ -184,11 +217,12 @@ class HamiltonianBuilderSEM:
 
         Mhalf    = np.diag(np.sqrt(np.diag(M)))
         Minvhalf = np.diag(1.0 / np.sqrt(np.diag(M)))
-        # Ktilde = -U.T @ U
-        Ktilde = -Minvhalf @ K @ Minvhalf
+        Ktilde = -U.T @ U
+        #Ktilde = Minvhalf @ K @ Minvhalf
 
         N = U.shape[0]
         I = np.eye(N)
+        #print("Ktilde matrix :", Ktilde)
 
         #Transformation matrix T and its inverse
         T = np.block([[U, np.zeros((N, N))],
@@ -206,8 +240,8 @@ class HamiltonianBuilderSEM:
         # print("H matrix log2 shape:", np.log2(H.shape))
         # print(np.allclose(U.T @ U, -Ktilde))
         #H /= np.max(np.abs(np.linalg.eigvals(H)))
-        # H = 1j * np.block([[np.zeros((N, N)), U],
-                        #   [-U.T, np.zeros((N, N))]])
+        H = 1j * np.block([[np.zeros((N, N)), U],
+                          [-U.T, np.zeros((N, N))]])
         np.save('H_sem.npy', H)
         print("H matrix max eigenvalue:", np.max(np.abs(np.linalg.eigvals(H))))
         herm_err = np.max(np.abs(H - H.conj().T))
@@ -224,6 +258,8 @@ class HamiltonianBuilderSEM:
         """Run full SEM assembly and Hamiltonian construction."""
         self.x, M_full, K_full, U = self._assemble_global()
         self.Q, self.H, self.U, self.T, self.T_inv, self.Mhalf = self._mass_scale_and_build_H(M_full, K_full, U)
+        # self.Pi_ac, self.eigenvalues, self.eigenvectors = self.build_acoustic_projector(K_full, M_full, self.Nel)
+        # self.H_proj, self.U_proj, self.Pi_block = self.build_projected_block_H(U, self.Pi_ac, self.H)
         return self
 
     # ------------------------ Getters / Setters -------------------------
@@ -249,6 +285,74 @@ class HamiltonianBuilderSEM:
         self.build()
         return self
 
+        #------------------projector------------------
+
+    def build_acoustic_projector(self, K, M, Nel_ac):
+        """
+        Solves K v = omega^2 M v.
+        Extracts Nel_ac acoustic eigenvectors.
+        Returns M-orthogonal projector Pi_ac in the N-dimensional space.
+        """
+        eigenvalues, eigenvectors = eigh(K, M)
+
+        # Spectral gap check
+        om_ac  = np.sqrt(np.abs(eigenvalues[Nel_ac - 1]))
+        om_opt = np.sqrt(np.abs(eigenvalues[Nel_ac]))
+        print(f"\nSpectral gap:")
+        print(f"  omega_acoustic_max = {om_ac:.4f}")
+        print(f"  omega_optical_min  = {om_opt:.4f}")
+        print(f"  Gap ratio          = {om_opt/om_ac:.2f}x")
+
+        # Acoustic eigenvectors in physical space
+        V_ac  = eigenvectors[:, :Nel_ac]              # shape (N, Nel_ac)
+
+        # M-orthogonal projector: Pi = V_ac V_ac^T M
+        Pi_ac = V_ac @ V_ac.T @ M                     # shape (N, N)
+
+        # Idempotency check
+        err = np.linalg.norm(Pi_ac @ Pi_ac - Pi_ac)
+        print(f"  Projector idempotency error: {err:.2e}")
+
+        return Pi_ac, eigenvalues, eigenvectors
+
+    def build_projected_block_H(self, U, Pi_ac, H_full):
+        """
+        Lifts Pi_ac to 2N x 2N block structure and projects H.
+
+        Pi_block = [[Pi_ac,   0   ],
+                    [  0,   Pi_ac ]]
+
+        H_proj = Pi_block @ H @ Pi_block
+            = 1j * [[0,         Pi_ac U Pi_ac ],
+                    [-Pi_ac U.T Pi_ac, 0      ]]
+        """
+        N = U.shape[0]
+
+        # Project U in the physical subspace
+        U_proj = Pi_ac @ U @ Pi_ac                    # shape (N, N)
+
+        # Lift projector to block space
+        Pi_block = np.block([
+            [Pi_ac,              np.zeros((N, N))],
+            [np.zeros((N, N)),   Pi_ac           ]
+        ])                                             # shape (2N, 2N)
+
+        # Build projected block H
+        H_proj = 1j * np.block([
+            [np.zeros((N, N)),   U_proj          ],
+            [-U_proj.T,          np.zeros((N, N))]
+        ])
+
+        # Verify Hermitian
+        herm_err = np.linalg.norm(H_proj - H_proj.conj().T)
+        print(f"\nH_proj Hermitian error: {herm_err:.2e}")
+
+        # Verify via direct projection: H_proj = Pi_block H Pi_block
+        H_proj_2 = Pi_block @ H_full @ Pi_block
+        consist  = np.linalg.norm(H_proj - H_proj_2)
+        print(f"Consistency ‖direct - block‖: {consist:.2e}")
+
+        return H_proj, U_proj, Pi_block
     
     def plot_sem_domain(self, figsize=(14, 5)):
         """
