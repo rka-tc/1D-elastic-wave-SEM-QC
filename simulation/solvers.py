@@ -36,7 +36,7 @@ from scipy.integrate import solve_ivp
 from qiskit_aer import AerSimulator
 
 # Own modules
-from utility.transformMain import HamiltonianBuilderSEM
+from utility.transform import HamiltonianBuilderSEM
 from utility.processing import MediumProcessor, StateProcessor
 from utility.backends import CloudBackend, LocalBackend
 from utility.circuits import CircuitGen1DA
@@ -84,8 +84,10 @@ class Solver1D:
         self.logger.info('Calculation completed.')
 
         # Update nx and initial conditions for boundary conditions
-        self.kwargs['nx'] = self.tf.nx
+        self.kwargs['nx'] = self.tf.nx - 2
+        print("tf.nx:",self.kwargs['nx'])
         self.kwargs['u'] = np.array(self.kwargs['u'])[1:-1].tolist()
+        print("u shape:", len(self.kwargs['u']))
         self.kwargs['v'] = np.array(self.kwargs['v'])[1:-1].tolist()
 
         # Set medium
@@ -269,7 +271,7 @@ class Solver1DLocal(Solver1D):
 
     def __init__(self, base_data: object, logger: object, **kwargs) -> None:
         super().__init__(base_data, logger, **kwargs)
-        self.st = StateProcessor(self.kwargs['nx'], self.kwargs['nt'], shift=-2)
+        self.st = StateProcessor(self.kwargs['nx'], self.kwargs['nt'], shift=0)
         self.st.set_u(self.kwargs['u'], 0)
         self.st.set_v(self.kwargs['v'], 0)
         self.st.forward_state(0, self.tf.t @ self.tf.sqrt_m)

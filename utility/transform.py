@@ -110,22 +110,25 @@ class HamiltonianBuilderSEM:
         #print(J, rho_e, self.wi)
         M_e = rho_e * np.diag(self.wi) * J
         M_einvsqrt = np.diag(1/np.sqrt(M_e.diagonal()))
-        Uref = (mu_e * (np.diag(self.wi) * (2.0 / dx_e))) @ self.D_ref @ M_einvsqrt
-        K_e = - self.D_ref.T @ ( mu_e * (np.diag(self.wi) * (2.0 / dx_e)) @ self.D_ref) 
+        E_ehalf = np.sqrt(mu_e * (np.diag(self.wi) * (2.0 / dx_e)))
+        Uref = E_ehalf @ self.D_ref
+        # Uref = (mu_e * (np.diag(self.wi) * (2.0 / dx_e))) @ self.D_ref @ M_einvsqrt
+        K_e = -self.D_ref.T @ ( mu_e * (np.diag(self.wi) * (2.0 / dx_e)) @ self.D_ref) 
+        K_etilde = M_einvsqrt @ (-K_e) @  M_einvsqrt
+        # print("U.T @ U - K check (should be close to 0):", np.max(np.abs(Uref.T @ Uref - K_etilde)))
         return M_e, K_e, Uref
 
 
     # ------------------------ Global Assembly ---------------------------
     def _assemble_global(self):
-        """Assemble global M and K matrices."""
+        # """Assemble global M and K matrices."""
         Nel, Np, L = self.Nel, self.Np, self.L
-        dx = L / Nel
+        dx       = L / Nel
         N_global = int(Nel * (Np - 1) + 1)
+
         M = np.zeros((N_global, N_global))
         K = np.zeros((N_global, N_global))
-        U = np.zeros((N_global, N_global)) 
-        dx = L / Nel
-        # self.xi has length Np, with self.xi[0] = -1, self.xi[-1] = +1
+        B_raw = np.zeros((Nel * Np, N_global))
         x_parts = []
         for e in range(Nel):
             x_left = e * dx
@@ -138,54 +141,57 @@ class HamiltonianBuilderSEM:
         assert len(x) == N_global
         np.save('x_sem.npy', x)
 
-
         for e in range(Nel):
             idx = np.arange(e * (Np - 1), e * (Np - 1) + Np)
             M_e, K_e, Uref = self._element_matrices(self.rho[e], self.mu[e], dx)
-           
+
             M[np.ix_(idx, idx)] += M_e
             K[np.ix_(idx, idx)] += K_e
-            U[np.ix_(idx, idx)] += Uref
-            
 
-        # # Apply Dirichlet boundary conditions
-        x = x[1:-1]
-        M_sub = M[1:-1, 1:-1]
-        K_sub = K[1:-1, 1:-1]
+            # ADD THIS BLOCK — scatter Uref columns using same idx connectivity
+            for local_j, global_j in enumerate(idx):
+                B_raw[e * Np:(e + 1) * Np, global_j] += Uref[:, local_j]
 
-        # 3. Mass-Normalize the Stiffness Matrix
-        # This accounts for the density (rho) changes
-        inv_sqrt_M = np.diag(1.0 / np.sqrt(np.diag(M_sub)))
-        K_tilde = inv_sqrt_M @ (K_sub) @ inv_sqrt_M
+        # after the loop — Dirichlet BCs
+        M_s   = M[1:-1, 1:-1]
+        K_s   = K[1:-1, 1:-1]
+        B_int = B_raw[:, 1:-1]          # drop boundary columns
+        N     = M_s.shape[0]
 
-        M = M_sub
-        K = K_sub
-        np.save('M_sem.npy', M)
-        np.save('K_sem.npy', K)
-        np.save('Ktilde.npy', K_tilde)
-        # print("global_idx for element 0:", [0*(Np-1) + i for i in range(Np)])  # [0,1,2,3]
-        # print("global_idx for element 1:", [1*(Np-1) + i for i in range(Np)])  # [3,4,5,6]
-        # print("global_idx for element 2:", [2*(Np-1) + i for i in range(Np)])
-        # print("K simmetric check (should be close to 0):", np.max(np.abs(K - K.T)))
-        # print("Mass matrix M :", M.shape)
-        # print("Stiffness matrix K :", K.shape)
-        # print("matrix U :", U.shape)
-        # print("U.T @ U - K check (should be close to 0):", np.max(np.abs(U.T @ U - K_tilde)))
+        # GLOBAL mass scaling — this is the critical fix vs local scaling
+        inv_sqrt_M = 1.0 / np.sqrt(np.diag(M_s))
+        B = B_int * inv_sqrt_M[np.newaxis, :]   # broadcast: divide each column j by sqrt(M_s[j,j])
+
+        # thin QR → U_global
+        from scipy.linalg import qr, cholesky
+        _, R    = qr(B, mode='economic')
+        signs   = np.sign(np.diag(R))
+        U_global = np.diag(signs) @ R           # enforce positive diagonal convention
+
+        # sanity checks
+        K_tilde = -np.diag(inv_sqrt_M) @ K_s @ np.diag(inv_sqrt_M)
+        K_hat   = K_tilde
+        print("shapes of matrix:","1) M:",M_s.shape,"2) K",K_s.shape,"3) U_global:", U_global.shape)
+        L = cholesky(K_hat, lower=False)
+        print(np.max(np.abs(L - U_global)))
+        print("B.T @ B - K_hat:",np.max(np.abs(B.T @ B - K_hat))) 
+        # print(B.T @ B, K_hat)  # < 1e-10, "B assembly wrong"
+        print("U_global.T @ U_global - K_hat:",np.max(np.abs(U_global.T @ U_global - K_hat))) #< 1e-10, "Cholesky violated"
         # print("is M diagonal?", np.allclose(M, np.diag(np.diag(M))))
 
-        return x, M, U, K
+        return x, M_s, U_global, K_hat
 
     # ------------------------ Boundary & Scaling ------------------------
     def _apply_boundary_conditions(self, M, K, U):
         return M[1:-1, 1:-1], K[1:-1, 1:-1], U[1:-1, 1:-1]
 
-    def _mass_scale_and_build_H(self, M, K, U):
+    def _mass_scale_and_build_H(self, M, Ktilde, U):
         """Mass scaling, Q matrix, and Hermitian H."""
 
         Mhalf    = np.diag(np.sqrt(np.diag(M)))
         Minvhalf = np.diag(1.0 / np.sqrt(np.diag(M)))
         # Ktilde = -U.T @ U
-        Ktilde = -Minvhalf @ K @ Minvhalf
+        # Ktilde = -Minvhalf @ K @ Minvhalf
 
         N = U.shape[0]
         I = np.eye(N)
@@ -197,17 +203,18 @@ class HamiltonianBuilderSEM:
 
         #Hermitian H and Q matrix
         Q = np.block([[np.zeros((N, N)), I],
-                      [Ktilde, np.zeros((N, N))]])
+                       [Ktilde, np.zeros((N, N))]])
 
-        H =  T @ Q @ T_inv
-        H = 1j * H
+        # H =  T @ Q @ T_inv
+        # H = 1j * H
 
         # print("H matrix shape:", H.shape)
         # print("H matrix log2 shape:", np.log2(H.shape))
         # print(np.allclose(U.T @ U, -Ktilde))
         #H /= np.max(np.abs(np.linalg.eigvals(H)))
-        # H = 1j * np.block([[np.zeros((N, N)), U],
-                        #   [-U.T, np.zeros((N, N))]])
+        H = 1j * np.block([[np.zeros((N, N)), U],
+                           [-U.T, np.zeros((N, N))]])
+        print("H shape:", H.shape, "T shape:", T.shape)
         np.save('H_sem.npy', H)
         print("H matrix max eigenvalue:", np.max(np.abs(np.linalg.eigvals(H))))
         herm_err = np.max(np.abs(H - H.conj().T))

@@ -39,7 +39,7 @@ class ProcessorBase:
         self.values_2 = np.zeros((nt, n_val2))
 
     def _set_val1(self, values: np.ndarray, index: int) -> None:
-        # print(values)
+        # print(values)""
         self.values_1[index] = values
 
     def _set_val2(self, values: np.ndarray, index: int) -> None:
@@ -96,7 +96,7 @@ class StateProcessor(ProcessorBase):
     """
     Class that processes the states of a quantum experiment.
     """
-    def __init__(self, nx: int, nt: int, shift: int = 3) -> None:
+    def __init__(self, nx: int, nt: int, shift: int = 2) -> None:
         super().__init__(nx, nx, nt) # Time-dependent state
         self.norm = 1
         self.states = np.zeros((nt, ((nx-shift)*2)))
@@ -160,9 +160,8 @@ class StateProcessor(ProcessorBase):
             transform (np.ndarray): The transformation matrix.
         """
         state = np.concatenate(self._get_vals(index))
-        # print("transform:"  , transform )
-        # print(state) # --- IGNORE ---
-        # print(len(state), transform.shape[1]) # --- IGNORE ---
+        print("transform:"  , transform.shape )
+        print(len(state), transform.shape[1]) # --- IGNORE ---
         assert len(state) == transform.shape[1], 'length of state must be equal to transform shape'
         transformed_state = transform @ state
         self.norm = np.linalg.norm(transformed_state)
